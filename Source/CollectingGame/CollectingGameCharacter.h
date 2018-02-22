@@ -9,6 +9,12 @@
 #include "Net/UnrealNetwork.h" 
 #include "CollectingGameCharacter.generated.h"
 
+UENUM(BlueprintType)
+enum class ECameraTypeEnum : uint8
+{
+	VE_FPS	UMETA(DisplayName="FPS"),
+	VE_TPS	UMETA(DisplayName="TPS")
+};
 
 UCLASS(config=Game)
 class ACollectingGameCharacter : public ACharacter
@@ -25,10 +31,10 @@ class ACollectingGameCharacter : public ACharacter
 
 	/** FPS camera */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = Camera, meta = (AllowPrivateAccess = "true"))
-	class UCameraComponent* FPSCamera;
+	class UCameraComponent* FPSCamera;	
 
-	/**CurrentCamera */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
+	/*Current Active Camera*/
+	UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadOnly, Category=Camera, meta=(AllowPrivateAccess="true"))
 	class UCameraComponent* CurrentCamera;
 
 	/** Physic Handle to pick up objects */
@@ -36,15 +42,14 @@ class ACollectingGameCharacter : public ACharacter
 	class UPhysicsHandleComponent* HandleComponent;
 
 	/** SceneComponent to set up location of the held objects */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly,Replicated ,Category = "Object Picking", meta = (AllowPrivateAccess = "true"))
+	UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadOnly,Category = "Object Picking", meta = (AllowPrivateAccess = "true"))
 	class USceneComponent *HeldObjectLocation;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon", meta = (AllowPrivateAccess = "true"))
-	class USkeletalMeshComponent* WeaponMesh;
+	class USkeletalMeshComponent* WeaponMesh;	
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon", meta = (AllowPrivateAccess = "true"))
-	class USceneComponent* ProjectileSpawnLocation;
-
+	UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadOnly, Category = "CameraType", meta = (AllowPrivateAccess = "true"))
+	ECameraTypeEnum CameraTypeEnum;
 	
 	UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
 	bool bJumpPressed = false;
@@ -54,12 +59,14 @@ class ACollectingGameCharacter : public ACharacter
 	bool bCanMove = true;	
 	UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
 	bool bCameraMovement = true;
+	UPROPERTY(Replicated)
+	bool bholdingObject = false;
+	UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+	bool bIsInAimOffsetRotation = false;
 
-	UPROPERTY(Replicated)
-	bool holdingObject = false;
-	
-	UPROPERTY(Replicated)
-	int Score = 0;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Projectile")
+	TSubclassOf<class ACollectingProjectile> ProjectileClass;
 
 public:
 	ACollectingGameCharacter();
@@ -141,14 +148,12 @@ public:
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
 	/** Returns isHoldingObject*/
-	FORCEINLINE bool IsHoldingObject() { return holdingObject; }
+	FORCEINLINE bool IsHoldingObject() { return bholdingObject; }
 
-	/** */
-	void IncreaseCollectingScore(int AdditionalScore);
-	UFUNCTION(Server, Reliable, WithValidation)
-	void ServerIncreaseCollectingScore(int AdditionalScore);
-	virtual void ServerIncreaseCollectingScore_Implementation(int AdditionalScore);
-	virtual bool ServerIncreaseCollectingScore_Validate(int AdditionalScore);
+	FORCEINLINE ECameraTypeEnum GetCameraType() { return CameraTypeEnum ; }
+
+	void SetCameraType(ECameraTypeEnum SomeCameraTypeEnum);	
+
 
 	UFUNCTION(Server, Reliable, WithValidation)
 	void DisableMovement();
@@ -157,8 +162,8 @@ public:
 	UFUNCTION(Server, Reliable, WithValidation)
 	void EnableMovement();
 	void EnableMovement_Implementation();
-	bool EnableMovement_Validate();
+	bool EnableMovement_Validate();	
 
-	void ResetCameraRotation();
+	void Fire();
 };
 

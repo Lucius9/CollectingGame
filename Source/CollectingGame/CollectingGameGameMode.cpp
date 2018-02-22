@@ -13,10 +13,10 @@
 ACollectingGameGameMode::ACollectingGameGameMode()
 {
 	// set default pawn class to our Blueprinted character
-	static ConstructorHelpers::FClassFinder<APawn> PlayerPawnBPClass(TEXT("/Game/Blueprints/ThirdPersonCharacter"));
-	if (PlayerPawnBPClass.Class != NULL)
+	TSubclassOf<ACollectingGameCharacter> PlayerPawnBPClass;
+	if (PlayerPawnBPClass != NULL)
 	{
-		DefaultPawnClass = PlayerPawnBPClass.Class;
+		DefaultPawnClass = PlayerPawnBPClass;
 	}
 	ACollectingGameState* GS = Cast<ACollectingGameState>(GameState);
 	
@@ -97,7 +97,8 @@ void ACollectingGameGameMode::RespawnAllPlayers()
 			{				
  				ACollectingGameCharacter* Pawn=Cast<ACollectingGameCharacter>(SpawnDefaultPawnFor(PC, PlayerStart));
 				if (Pawn)
-				{					
+				{				
+					Pawn->SetCameraType(Character->GetCameraType());
 					PC->Possess(Pawn);								
 					Character->Destroy();
 					GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Yellow, Pawn->GetControlRotation().ToString());

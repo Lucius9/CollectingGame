@@ -11,7 +11,9 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "GoldenCube.h"
 #include "CollectingPlayerState.h"
-#include "Engine.h"
+#include "CollectingProjectile.h"
+#include "Kismet/KismetMathLibrary.h"
+
 
 #define print(x) if(GEngine){GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Yellow, TEXT(x));}
 
@@ -35,8 +37,10 @@ ACollectingGameCharacter::ACollectingGameCharacter()
 	// Configure character movement
 	GetCharacterMovement()->bOrientRotationToMovement = true; // Character moves in the direction of input...	
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f); // ...at this rotation rate
-	GetCharacterMovement()->JumpZVelocity = 600.f;
-	GetCharacterMovement()->AirControl = 0.2f;
+	GetCharacterMovement()->MaxWalkSpeed = 375.0f;
+	GetCharacterMovement()->MaxWalkSpeedCrouched = 100.0f;
+	GetCharacterMovement()->JumpZVelocity = 365.0f;
+	GetCharacterMovement()->AirControl = 0.2f;	
 
 	// Create a camera boom (pulls in towards the player if there is a collision)
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
@@ -47,20 +51,19 @@ ACollectingGameCharacter::ACollectingGameCharacter()
 	// Create a follow camera
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName); // Attach the camera to the end of the boom and let the boom adjust to match the controller orientation
-	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm
-	//Set CurrentCamera to Third Person
-	CurrentCamera = FollowCamera;	
-	CurrentCamera->SetActive(true);
-	
+	FollowCamera->bUsePawnControlRotation = false; // Camera does not rotate relative to arm	
+	FollowCamera->SetActive(true);	
 	
 	 //Create FPS Camera
-	FPSCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FPSCamera"));
-	//FPSCamera->SetupAttachment(GetMesh());
+	FPSCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FPSCamera"));	
 	FPSCamera->SetRelativeLocation(FVector(0.0f, 10.0f, 0.0f));
 	FPSCamera->SetupAttachment(GetMesh(),FName(TEXT("FPSCam")));
 	FPSCamera->SetRelativeRotation(FRotator(0.0f, 90.0f, -90.0f));	
 	FPSCamera->SetActive(false);
 	FPSCamera->bUsePawnControlRotation = true;
+
+	CameraTypeEnum = ECameraTypeEnum::VE_TPS;
+	CurrentCamera = FollowCamera;
 
 	HandleComponent = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("HandleComponent"));		
 	HandleComponent->bSoftLinearConstraint = false;
@@ -71,16 +74,10 @@ ACollectingGameCharacter::ACollectingGameCharacter()
 
 	bReplicates = true;
 	// Note: The skeletal mesh and anim blueprint references on the Mesh component (inherited from Character) 
-	// are set in the derived blueprint asset named MyCharacter (to avoid direct content references in C++)
-
-	GetCharacterMovement()->MaxWalkSpeed = 375.0f;
-	GetCharacterMovement()->MaxWalkSpeedCrouched = 100.0f;
+	// are set in the derived blueprint asset named MyCharacter (to avoid direct content references in C++)	
 
 	WeaponMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("Gun"));	
-	WeaponMesh->SetupAttachment(GetMesh(), FName(TEXT("WeaponHolder")));
-
-	ProjectileSpawnLocation = CreateDefaultSubobject<USceneComponent>(TEXT("ProjectileSpawnLocation"));
-	ProjectileSpawnLocation->SetupAttachment(WeaponMesh);
+	WeaponMesh->SetupAttachment(GetMesh(), FName(TEXT("WeaponHolder")));	
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -119,6 +116,9 @@ void ACollectingGameCharacter::SetupPlayerInputComponent(class UInputComponent* 
 	PlayerInputComponent->BindAction("SwitchCamera", IE_Pressed, this, &ACollectingGameCharacter::SwitchCamera);
 	// VR headset functionality
 	PlayerInputComponent->BindAction("ResetVR", IE_Pressed, this, &ACollectingGameCharacter::OnResetVR);	
+
+	//Fire Weapon
+	PlayerInputComponent->BindAction("Fire", IE_Pressed, this, &ACollectingGameCharacter::Fire);
 }
 
 void ACollectingGameCharacter::Tick(float deltaSeconds)
@@ -128,16 +128,28 @@ void ACollectingGameCharacter::Tick(float deltaSeconds)
 	{
 		HandleComponent->SetTargetLocation(HeldObjectLocation->GetComponentLocation());		
 	}
+	FRotator ControlRotationYaw = FRotator(0.f, GetControlRotation().Yaw, 0.f);
+	FRotator ActorRotationYaw = FRotator(0.f, GetActorRotation().Yaw, 0.f);
+	FRotator Delta = UKismetMathLibrary::NormalizedDeltaRotator(ControlRotationYaw,ActorRotationYaw);
+	if (fabs(Delta.Yaw) > 90.f || bIsInAimOffsetRotation)
+	{
+		bIsInAimOffsetRotation = true;
+		FRotator NewDelta= UKismetMathLibrary::RInterpTo(FRotator(0.f), Delta, deltaSeconds, 5);
+		FHitResult RotResult;
+		AddActorWorldRotation(NewDelta, false,&RotResult, ETeleportType::None);
+		bIsInAimOffsetRotation = !(UKismetMathLibrary::NearlyEqual_FloatFloat(Delta.Yaw, 0.f, 2));
+	}
 	
 }
 
 void ACollectingGameCharacter::GetLifetimeReplicatedProps(TArray< FLifetimeProperty > & OutLifetimeProps)const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-
-	DOREPLIFETIME(ACollectingGameCharacter, holdingObject);
-	DOREPLIFETIME(ACollectingGameCharacter, HeldObjectLocation);
-	DOREPLIFETIME(ACollectingGameCharacter, Score);
+	
+	DOREPLIFETIME(ACollectingGameCharacter,CurrentCamera);
+	DOREPLIFETIME(ACollectingGameCharacter, CameraTypeEnum);
+	DOREPLIFETIME(ACollectingGameCharacter, bholdingObject);
+	DOREPLIFETIME(ACollectingGameCharacter, HeldObjectLocation);	
 	DOREPLIFETIME(ACollectingGameCharacter, bCanMove);
 	DOREPLIFETIME(ACollectingGameCharacter, bJumpPressed);
 	DOREPLIFETIME(ACollectingGameCharacter, bCrouchPressed);
@@ -298,8 +310,17 @@ void ACollectingGameCharacter::ServerPickUpObject_Implementation()
 
 		FCollisionQueryParams HoldingTraceQuery = FCollisionQueryParams(TraceTag, false, this);
 		FHitResult HoldingTraceResult(ForceInit);
-		FVector Start = CurrentCamera->GetComponentLocation();
-		FVector End = (CurrentCamera->GetForwardVector() * 600) + Start;
+		FVector Start, End;
+		if (CameraTypeEnum == ECameraTypeEnum::VE_TPS)
+		{
+			Start = CurrentCamera->GetComponentLocation();
+			End = (CurrentCamera->GetForwardVector() * 600) + Start;
+		}
+		else
+		{
+			Start = CurrentCamera->GetComponentLocation();
+			End = (CurrentCamera->GetForwardVector() * 200) + Start;
+		}	
 
 		bool blocking = World->LineTraceSingleByChannel(HoldingTraceResult, Start, End, ECollisionChannel::ECC_Visibility, HoldingTraceQuery);
 
@@ -313,7 +334,7 @@ void ACollectingGameCharacter::ServerPickUpObject_Implementation()
 			{
 				HandleComponent->GrabComponentAtLocation(ObjectToPick, NAME_None, ObjectToPick->GetComponentLocation());
 				HandleComponent->GetGrabbedComponent()->SetEnableGravity(false);
-				holdingObject = true;
+				bholdingObject = true;
 				GoldenCube->SetIsHeld(true);
 				GoldenCube->SetLastHolder(this);
 			}				
@@ -345,7 +366,7 @@ void ACollectingGameCharacter::ServerDropObject_Implementation()
 	{
 		HeldObject->SetEnableGravity(true);
 		HandleComponent->ReleaseComponent();
-		holdingObject = false;
+		bholdingObject = false;
 		GoldenCube->SetIsHeld(false);
 	}	
 }
@@ -356,51 +377,50 @@ bool ACollectingGameCharacter::ServerDropObject_Validate()
 }
 
 void ACollectingGameCharacter::SwitchCamera()
-{	
+{
 	AController *Controller = Cast<AController>(GetController());
-	
-	CurrentCamera->Deactivate();
-
 	if (Controller)
 	{
-		
+		CurrentCamera->Deactivate();
 		FRotator ControlRotator = Controller->GetControlRotation();
 		this->SetActorRotation(FRotator(0.0f, ControlRotator.Yaw, 0.0f));
-		if (CurrentCamera == FPSCamera)
-		{
+		if (CameraTypeEnum == ECameraTypeEnum::VE_FPS)
+		{			
 			this->bUseControllerRotationYaw = false;
+			CameraTypeEnum = ECameraTypeEnum::VE_TPS;
 			CurrentCamera = FollowCamera;
 		}
 		else
 		{
+			FollowCamera->Deactivate();
 			this->bUseControllerRotationYaw = true;
-			CurrentCamera = FPSCamera;				
+			CameraTypeEnum = ECameraTypeEnum::VE_FPS;
+			CurrentCamera = FPSCamera;		
 		}
-	}
-	CurrentCamera->Activate();	
-}
 
-void ACollectingGameCharacter::IncreaseCollectingScore(int AdditionalScore)
-{
-	if (Role <= ROLE_Authority)
-	{
-		ServerIncreaseCollectingScore(AdditionalScore);
+		CurrentCamera->Activate();
 	}
 }
 
-void ACollectingGameCharacter::ServerIncreaseCollectingScore_Implementation(int AdditionalScore)
-{
-	ACollectingPlayerState* MyPlayerState = Cast<ACollectingPlayerState>(this->PlayerState);
 
-	if (MyPlayerState)
-	{
-		MyPlayerState->IncreaseCollectingScore(AdditionalScore);
+
+void ACollectingGameCharacter::SetCameraType(ECameraTypeEnum SomeCameraTypeEnum)
+{
+	this->CameraTypeEnum = CameraTypeEnum;
+	CurrentCamera->Deactivate();
+
+	if (CameraTypeEnum == ECameraTypeEnum::VE_FPS)
+	{		
+		this->bUseControllerRotationYaw = true;
+		CurrentCamera = FPSCamera;		
 	}
-}
+	else
+	{		
+		this->bUseControllerRotationYaw = false;
+		CurrentCamera = FollowCamera;
+	}
 
-bool ACollectingGameCharacter::ServerIncreaseCollectingScore_Validate(int AdditionalScore)
-{
-	return true;
+	CurrentCamera->Activate();
 }
 
 void ACollectingGameCharacter::DisableMovement_Implementation()
@@ -425,14 +445,35 @@ bool ACollectingGameCharacter::EnableMovement_Validate()
 	return true;
 }
 
-void ACollectingGameCharacter::ResetCameraRotation()
+void ACollectingGameCharacter::Fire()
 {
-	if (CurrentCamera == FPSCamera)
+	UWorld* World = GetWorld();
+	if (ProjectileClass != NULL && World)
 	{
-		FPSCamera->SetRelativeRotation(FRotator(10.0f, 90.0f, -90.0f));
-	}
-	else
-	{
-		CameraBoom->SetRelativeRotation(FRotator(0.0f, 0.0f, 0.0f));
-	}
+		
+		FVector Start = CurrentCamera->GetComponentLocation();
+		
+		FVector End = Start + (CurrentCamera->GetForwardVector() * 50000) ;
+		FHitResult FireResult(ForceInit);
+
+		FCollisionQueryParams FireTraceQuery = FCollisionQueryParams(TEXT("FireTrace"), false, this);
+		
+		bool blocking = World->LineTraceSingleByChannel(FireResult, Start, End, ECollisionChannel::ECC_Visibility,FireTraceQuery);
+		FVector SpawnLocation = WeaponMesh->GetSocketLocation("Muzzle");
+		FRotator SpawnRotation;
+
+		FActorSpawnParameters ActorSpawnParams;
+		ActorSpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButDontSpawnIfColliding;
+		if (blocking)
+		{			
+			
+			SpawnRotation = UKismetMathLibrary::FindLookAtRotation(SpawnLocation, FireResult.ImpactPoint);
+						
+		}
+		else
+		{
+			SpawnRotation = UKismetMathLibrary::FindLookAtRotation(SpawnLocation, FireResult.TraceEnd);
+		}			
+		World->SpawnActor<ACollectingProjectile>(ProjectileClass, SpawnLocation, SpawnRotation, ActorSpawnParams);
+	}	
 }
